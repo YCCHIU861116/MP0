@@ -100,19 +100,20 @@ int main(int argc, char* argv[])
 		fp = fopen(locallr,"r");
 		if(fp != NULL){
 			fseek(fp,0,SEEK_END);
-			int prepos = (int)ftell(fp);
-			for(int i = 0; i < atoi(argv[2]) && prepos > 1; i++){
-				Findchr(fp,'#'); 
-				int beginpos = (int)ftell(fp);
-				while((int)ftell(fp) < prepos){
+			int prepos = (int)ftell(fp);//the end of .loser_record,EOF
+			for(int i = 0; i < atoi(argv[2]) && prepos > 0; i++){//if pre # is at the beginning of LR
+				Findchr(fp,'#');//search from the tail of a commit 
+				int beginpos = (int)ftell(fp);//the pos of #
+				while((int)ftell(fp) < prepos){// while not reaching the pre #
 					char c = fgetc(fp);
-					if(!((c=='\n') && (((int)ftell(fp))==prepos) && ((beginpos == 1) ||(i == atoi(argv[2])-1))))
-						putchar(c);
+					if(!((c=='\n') && (((int)ftell(fp))==prepos) && ((beginpos == 0) ||(i == atoi(argv[2])-1))))
+						putchar(c);//
 				}
-				if((i == 0) && (beginpos != 1))
+				if(i == 0){ //
 					putchar('\n');
-				prepos = beginpos;
-				fseek(fp,prepos-1,SEEK_SET);
+				}
+				prepos = beginpos;// the pos of pre #
+				fseek(fp,prepos-1,SEEK_SET);//move to right left of the pos of pre #
 			} 
 			fclose(fp);
 		}
