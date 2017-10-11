@@ -8,9 +8,10 @@
 #define NAME_MAXLENGTH 257 
 #define BUF_SIZE 65536
 #define MAX_FILE_NUM 1000
+#define MAX_FILE_SIZE 100000000 
 const char LR[NAME_MAXLENGTH] ="/.loser_record";
 const char LC[NAME_MAXLENGTH] ="/.loser_config";
-char buf[BUF_SIZE],msg[100000001];
+char buf[BUF_SIZE],msg[MAX_FILE_SIZE+1];
 struct files{
 	char name[NAME_MAXLENGTH];
 	char MD5[33];
@@ -18,6 +19,22 @@ struct files{
 
 int compare(const void* data1, const void* data2){
 	return strcmp(*(char**)data1,*(char**)data2);
+}
+void MD52(const char *file,const char *dir,char *md5){
+	FILE* fp = fopen(".tmp1234tmp","w");
+	fclose(fp);
+	char command[10000];
+	strcpy(command,"md5sum ");
+	strcat(command,dir);
+	strcat(command,"/");
+	strcat(command,file);
+	strcat(command," >> ");
+	strcat(command,".tmp1234tmp");
+	system(command);
+	fp = fopen(".tmp1234tmp","r");
+	fscanf(fp,"%s",md5);
+	system ("rm -f .tmp1234tmp");
+	return;
 }
 void MD5(const char *file,const char *dir,char *M){
 	int j,k;
@@ -28,8 +45,13 @@ void MD5(const char *file,const char *dir,char *M){
  	strcat(whole,file);
 //	printf("%s\n",whole);
  	FILE *fd = fopen(whole,"r");
- 	int length = fread(msg,1,100000000,fd);
+ 	int length = fread(msg,1,MAX_FILE_SIZE,fd);
 	msg[length] = '\0';
+	if(length > MAX_FILE_SIZE/2){
+		fclose(fd);
+		MD52(file,dir,M);
+		return;
+	}
     unsigned *d = md5(msg, strlen(msg));
     WBunion u;
  
@@ -196,7 +218,7 @@ int main(int argc, char* argv[])
 				Findchr(fp,')');
 				fseek(fp,1,SEEK_CUR);
 				while(!feof(fp)){
-					fscanf(fp,"%s%s",oldfiles[oldfilesum].name,oldfiles[oldfilesum].MD5);\
+					fscanf(fp,"%s%s",oldfiles[oldfilesum].name,oldfiles[oldfilesum].MD5);
 					oldfilesum ++;
 				}
 				int newnum[file_names.length],newsum = 0;
