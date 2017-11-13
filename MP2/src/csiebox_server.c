@@ -9,13 +9,14 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <fcntl.h> 
-#include <utime.h> 
+#include <errno.h>
 
 #define DATABUF_SIZE 4000
 #define PATHLEN_SIZE 301
@@ -193,10 +194,12 @@ int sampleFunction(int conn_fd, csiebox_protocol_meta* meta) {
 }
 
 int modify_time(char *filename, struct stat *stat){
-	struct utimbuf new_times;
-	new_times.actime = stat->st_atime;
-	new_times.modtime = stat->st_mtime;
-	return utime(filename,&new_times);
+	struct timeval new_times[2];
+	new_times[0].tv_sec = (long)stat->st_atime;
+	new_times[0].tv_usec = 0;
+	new_times[1].tv_sec = (long)stat->st_mtime;
+	new_times[1].tv_usec = 0;
+	return lutimes(filename,new_times);
 }
 
 int send_response(int conn_fd, uint8_t op, uint8_t status){
@@ -217,6 +220,8 @@ static char* sync_meta(csiebox_server* server, int conn_fd, csiebox_protocol_met
 	char cpathname[PATHLEN_SIZE],homedir[PATH_MAX];
 	char *spathname = (char*)malloc(sizeof(char) * PATHLEN_SIZE);
 	struct stat parentstat;
+	uint8_t hash[MD5_DIGEST_LENGTH];
+	memset(&hash, 0, sizeof(hash));
 	sprintf(homedir,"%s/%s",server->arg.path,server->client[conn_fd]->account.user);
 	recv_message(conn_fd,cpathname,meta->message.body.pathlen);
 	sprintf(spathname,"%s%s",homedir,((strchr(cpathname+3,'/') == NULL)? "":strchr(cpathname+3,'/')));
@@ -237,17 +242,47 @@ static char* sync_meta(csiebox_server* server, int conn_fd, csiebox_protocol_met
 		if(modify_time(spathname,&meta->message.body.stat) == -1)
 			fprintf(stderr,"time change error\n");
 		send_response(conn_fd,CSIEBOX_PROTOCOL_OP_SYNC_META,CSIEBOX_PROTOCOL_STATUS_OK);
-		return spathname;
 	}
-	if(access(spathname,F_OK) == -1){
-		int fd;
+	else if(S_ISLNK(meta->message.body.stat.st_mode)){
+		ssize_t linklen;
+		char buf[PATHLEN_SIZE];
+		if((linklen = readlink(spathname,buf,PATHLEN_SIZE)) == -1){
+			spathname[strrchr(spathname,'/')-spathname] = '\0';
+			lstat(spathname,&parentstat);
+			spathname[strlen(spathname)] = '/';
+			fprintf(stderr,"reading symlink of %s \n", spathname);
+			if(errno != ENOENT){ 
+				fprintf(stderr,"readlink %s fail\n", spathname);
+				return spathname;
+			} 
+			if(symlink("anything",spathname) == -1)
+				fprintf(stderr,"make symlink fail\n");
+			if(modify_time(spathname,&meta->message.body.stat) == -1)
+				fprintf(stderr,"time change error\n");
+			spathname[strrchr(spathname,'/')-spathname] = '\0';
+			modify_time(spathname,&parentstat);
+			spathname[strlen(spathname)] = '/';
+			send_response(conn_fd,CSIEBOX_PROTOCOL_OP_SYNC_META,CSIEBOX_PROTOCOL_STATUS_MORE);
+		}
+		else{
+			md5(buf,linklen,hash);
+			if(modify_time(spathname,&meta->message.body.stat) == -1)
+				fprintf(stderr,"time change error\n");
+			if(memcmp(hash, meta->message.body.hash, sizeof(hash)))
+				send_response(conn_fd,CSIEBOX_PROTOCOL_OP_SYNC_META,CSIEBOX_PROTOCOL_STATUS_MORE);
+			else
+				send_response(conn_fd,CSIEBOX_PROTOCOL_OP_SYNC_META,CSIEBOX_PROTOCOL_STATUS_OK);
+		}
+	}
+	else if(access(spathname,F_OK) == -1){
 		spathname[strrchr(spathname,'/')-spathname] = '\0';
 		lstat(spathname,&parentstat);
 		spathname[strlen(spathname)] = '/';
+		int fd;
 		if((fd = open(spathname,O_WRONLY|O_CREAT)) == -1){//change mtime of parent dir
 			fprintf(stderr,"fail while creating file\n");
 			send_response(conn_fd,CSIEBOX_PROTOCOL_OP_SYNC_META,CSIEBOX_PROTOCOL_STATUS_FAIL);
-			return 0;
+			return spathname;
 		}
 		close(fd);
 		spathname[strrchr(spathname,'/')-spathname] = '\0';
@@ -258,38 +293,54 @@ static char* sync_meta(csiebox_server* server, int conn_fd, csiebox_protocol_met
 		if(modify_time(spathname,&meta->message.body.stat) == -1)
 			fprintf(stderr,"time change error\n");
 		send_response(conn_fd,CSIEBOX_PROTOCOL_OP_SYNC_META,CSIEBOX_PROTOCOL_STATUS_MORE);
-		return spathname;
 	}	
-	uint8_t hash[MD5_DIGEST_LENGTH];
-	memset(&hash, 0, sizeof(hash));
-	md5_file(spathname, hash);
-	if(chmod(spathname,meta->message.body.stat.st_mode) == -1)
-		fprintf(stderr,"chmod error\n");
-	if(modify_time(spathname,&meta->message.body.stat) == -1)
-		fprintf(stderr,"time change error\n");
-	if (memcmp(hash, meta->message.body.hash, sizeof(hash)))
-		send_response(conn_fd,CSIEBOX_PROTOCOL_OP_SYNC_META,CSIEBOX_PROTOCOL_STATUS_MORE);
-	else
-		send_response(conn_fd,CSIEBOX_PROTOCOL_OP_SYNC_META,CSIEBOX_PROTOCOL_STATUS_OK);
+	else{
+		md5_file(spathname, hash);
+		if(chmod(spathname,meta->message.body.stat.st_mode) == -1)
+			fprintf(stderr,"chmod error\n");
+		if(modify_time(spathname,&meta->message.body.stat) == -1)
+			fprintf(stderr,"time change error\n");
+		if (memcmp(hash, meta->message.body.hash, sizeof(hash)))
+			send_response(conn_fd,CSIEBOX_PROTOCOL_OP_SYNC_META,CSIEBOX_PROTOCOL_STATUS_MORE);
+		else
+			send_response(conn_fd,CSIEBOX_PROTOCOL_OP_SYNC_META,CSIEBOX_PROTOCOL_STATUS_OK);
+	}
 	return spathname;
 }
 
 static void sync_file(csiebox_server* server, int conn_fd, csiebox_protocol_file *file,char *pathname){
 	char databuf[DATABUF_SIZE];
-	struct stat statbuf;
+	struct stat statbuf,parentstat;
 	lstat(pathname,&statbuf);
 	recv_message(conn_fd,databuf,file->message.body.datalen);
 	fprintf(stderr,"processing data of %s\n",pathname);
-	int fd;
-	if((fd = open(pathname,O_WRONLY|O_TRUNC)) < 0){
-		fprintf(stderr,"%s open fail\n",pathname);
-		send_response(conn_fd,CSIEBOX_PROTOCOL_OP_SYNC_FILE,CSIEBOX_PROTOCOL_STATUS_FAIL);
-		return;
+	if(S_ISLNK(statbuf.st_mode)){
+		pathname[strrchr(pathname,'/')-pathname] = '\0';
+		lstat(pathname,&parentstat);
+		pathname[strlen(pathname)] = '/';
+		unlink(pathname);
+		databuf[file->message.body.datalen] = '\0';
+		if(symlink(databuf,pathname) == -1){
+			fprintf(stderr,"symlink %s -> %s error\n",pathname,databuf);
+			send_response(conn_fd,CSIEBOX_PROTOCOL_OP_SYNC_FILE,CSIEBOX_PROTOCOL_STATUS_FAIL);
+			return;
+		}
+		pathname[strrchr(pathname,'/')-pathname] = '\0';
+		modify_time(pathname,&parentstat);
+		pathname[strlen(pathname)] = '/';
 	}
-	if(write(fd,databuf,file->message.body.datalen) < file->message.body.datalen){
-		fprintf(stderr,"%s write fail\n",pathname);
-		send_response(conn_fd,CSIEBOX_PROTOCOL_OP_SYNC_FILE,CSIEBOX_PROTOCOL_STATUS_FAIL);
-		return;
+	else{
+		int fd;
+		if((fd = open(pathname,O_WRONLY|O_TRUNC)) < 0){
+			fprintf(stderr,"%s open fail\n",pathname);
+			send_response(conn_fd,CSIEBOX_PROTOCOL_OP_SYNC_FILE,CSIEBOX_PROTOCOL_STATUS_FAIL);
+			return;
+		}
+		if(write(fd,databuf,file->message.body.datalen) < file->message.body.datalen){
+			fprintf(stderr,"%s write fail\n",pathname);
+			send_response(conn_fd,CSIEBOX_PROTOCOL_OP_SYNC_FILE,CSIEBOX_PROTOCOL_STATUS_FAIL);
+			return;
+		}
 	}
 	if(modify_time(pathname,&statbuf) == -1)
 		fprintf(stderr,"time change error\n");
@@ -316,6 +367,8 @@ static void handle_request(csiebox_server* server, int conn_fd) {
       case CSIEBOX_PROTOCOL_OP_SYNC_META:
         fprintf(stderr, "sync meta\n");
         csiebox_protocol_meta meta;
+        if(pathname != NULL)
+        	free(pathname);
         if (complete_message_with_header(conn_fd, &header, &meta)) {
         	pathname = sync_meta(server, conn_fd, &meta);
         }
@@ -325,7 +378,6 @@ static void handle_request(csiebox_server* server, int conn_fd) {
         csiebox_protocol_file file;
         if (complete_message_with_header(conn_fd, &header, &file)) {
         	sync_file(server, conn_fd, &file, pathname);
-			free(pathname);	
         }
         break;
       case CSIEBOX_PROTOCOL_OP_SYNC_HARDLINK:

@@ -9,7 +9,7 @@
 #include <dirent.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <utime.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 
@@ -93,10 +93,12 @@ int sampleFunction(csiebox_client* client){
 }
 
 int modify_time(char *filename, struct stat *stat){
-	struct utimbuf new_times;
-	new_times.actime = stat->st_atime;
-	new_times.modtime = stat->st_mtime;
-	return utime(filename,&new_times);
+	struct timeval new_times[2];
+	new_times[0].tv_sec = (long)stat->st_atime;
+	new_times[0].tv_usec = 0;
+	new_times[1].tv_sec = (long)stat->st_mtime;
+	new_times[1].tv_usec = 0;
+	return lutimes(filename,new_times);
 }
 
 int recv_response(int conn_fd,uint8_t flag){
@@ -131,8 +133,15 @@ int sync_meta(char *pathname, int conn_fd, struct stat *stat){
 	req.message.header.req.datalen = sizeof(req) - sizeof(req.message.header);
 	req.message.body.pathlen = strlen(pathname)+1;
 	req.message.body.stat = *stat;
-	if(S_ISDIR(stat->st_mode) == 0)
-		md5_file(pathname,req.message.body.hash);
+	if(S_ISDIR(stat->st_mode) == 0){
+		if(S_ISLNK(stat->st_mode)){
+			char buf[PATHLEN_SIZE];
+			ssize_t len = readlink(pathname,buf,DATABUF_SIZE);
+			md5(buf,len,req.message.body.hash);
+		}
+		else
+			md5_file(pathname,req.message.body.hash);
+	}
 	fprintf(stderr,"sending meta of %s\n",pathname);
 	if(send_message(conn_fd,&req,sizeof(req)) == 0){
 		fprintf(stderr,"send error\n");
@@ -142,7 +151,7 @@ int sync_meta(char *pathname, int conn_fd, struct stat *stat){
 	return recv_response(conn_fd,CSIEBOX_PROTOCOL_OP_SYNC_META);
 }
 
-int sync_file(char *pathname,int conn_fd){
+int sync_file(char *pathname,int conn_fd,struct stat *stat){
 	csiebox_protocol_file req;
 	memset(&req, 0, sizeof(req));
 	req.message.header.req.magic = CSIEBOX_PROTOCOL_MAGIC_REQ;
@@ -150,11 +159,23 @@ int sync_file(char *pathname,int conn_fd){
 	req.message.header.req.datalen = sizeof(req) - sizeof(req.message.header);
 	int fd;
 	char buf[DATABUF_SIZE];
-	if((fd = open(pathname,O_RDONLY)) == -1){
-		fprintf(stderr,"open %s fail\n",pathname);
-		return 0;
+	if(S_ISLNK(stat->st_mode)){
+		ssize_t tmp;
+		if((tmp = readlink(pathname,buf,DATABUF_SIZE)) == -1){
+			fprintf(stderr,"readlink %s fail\n",pathname);
+			return 0;
+		}
+		buf[tmp] = '\0';
+		fprintf(stderr,"softlink point to %s\n",buf);
+		req.message.body.datalen = (size_t)tmp;
 	}
-	req.message.body.datalen = (size_t)read(fd,buf,DATABUF_SIZE);
+	else{
+		if((fd = open(pathname,O_RDONLY)) == -1){
+			fprintf(stderr,"open %s fail\n",pathname);
+			return 0;
+		}
+		req.message.body.datalen = (size_t)read(fd,buf,DATABUF_SIZE);
+	}
 	if(send_message(conn_fd,&req,sizeof(req)) == 0){
 		fprintf(stderr,"send fail\n");
 		return 0;
@@ -171,12 +192,8 @@ int cdir_traverse(char *path, int conn_fd,int *maxdepth, char* longestpath){
 		fprintf(stderr,"%s lstat error\n",path);
 		return 0;
 	}
-	if(S_ISLNK(statbuf->st_mode)){
-		
-		return 1;
-	}
 	if(sync_meta(path,conn_fd,statbuf) == 2)
-		sync_file(path,conn_fd);
+		sync_file(path,conn_fd,statbuf);
 	
 	//dealing with deepestpath	
 	int depthsum = 0;
@@ -219,6 +236,7 @@ int cdir_traverse(char *path, int conn_fd,int *maxdepth, char* longestpath){
 	}
 	path[len] = '\0';
 	modify_time(path,statbuf);
+	//sync_meta(path,conn_fd,statbuf);
 	free(statbuf);
 	return 1;
 }
@@ -244,7 +262,7 @@ int csiebox_client_run(csiebox_client* client) {
   struct stat statbuf;
   lstat(longestpath,&statbuf);
   if(sync_meta(longestpath,client->conn_fd,&statbuf)==2);
-	sync_file(longestpath,client->conn_fd);
+	sync_file(longestpath,client->conn_fd,&statbuf);
   modify_time(longestpath,&statbuf);
   return 1;
 }
