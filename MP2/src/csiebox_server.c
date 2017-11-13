@@ -216,16 +216,15 @@ int send_response(int conn_fd, uint8_t op, uint8_t status){
 	return 1;
 }
 
-static char* sync_meta(csiebox_server* server, int conn_fd, csiebox_protocol_meta *meta){
-	char cpathname[PATHLEN_SIZE],homedir[PATH_MAX];
+static char* sync_meta(int conn_fd, csiebox_protocol_meta *meta, char* homedir){
+	char cpathname[PATHLEN_SIZE];
 	char *spathname = (char*)malloc(sizeof(char) * PATHLEN_SIZE);
+	recv_message(conn_fd,cpathname,meta->message.body.pathlen);
+	sprintf(spathname,"%s%s",homedir,cpathname);
+	fprintf(stderr,"processing meta of %s\n",spathname);
 	struct stat parentstat;
 	uint8_t hash[MD5_DIGEST_LENGTH];
 	memset(&hash, 0, sizeof(hash));
-	sprintf(homedir,"%s/%s",server->arg.path,server->client[conn_fd]->account.user);
-	recv_message(conn_fd,cpathname,meta->message.body.pathlen);
-	sprintf(spathname,"%s%s",homedir,((strchr(cpathname+3,'/') == NULL)? "":strchr(cpathname+3,'/')));
-	fprintf(stderr,"processing meta of %s\n",spathname);
 	
 	if(S_ISDIR(meta->message.body.stat.st_mode)){
 		if(access(spathname,F_OK) == -1){
@@ -308,7 +307,7 @@ static char* sync_meta(csiebox_server* server, int conn_fd, csiebox_protocol_met
 	return spathname;
 }
 
-static void sync_file(csiebox_server* server, int conn_fd, csiebox_protocol_file *file,char *pathname){
+static void sync_file(int conn_fd, csiebox_protocol_file *file,char *pathname){
 	char databuf[DATABUF_SIZE];
 	struct stat statbuf,parentstat;
 	lstat(pathname,&statbuf);
@@ -347,9 +346,33 @@ static void sync_file(csiebox_server* server, int conn_fd, csiebox_protocol_file
 	send_response(conn_fd,CSIEBOX_PROTOCOL_OP_SYNC_FILE,CSIEBOX_PROTOCOL_STATUS_OK);
 }
 
+static void sync_hardlink(int conn_fd, csiebox_protocol_hardlink *hardlink, char* homedir){
+	char combinedname[PATHLEN_SIZE*2];
+	char source[PATHLEN_SIZE],target[PATHLEN_SIZE];
+	struct stat parentstat;
+	recv_message(conn_fd,combinedname,hardlink->message.body.srclen+hardlink->message.body.targetlen+1);
+	sprintf(target,"%s%s",homedir,combinedname+hardlink->message.body.srclen);
+	combinedname[hardlink->message.body.srclen] = '\0';
+	sprintf(source,"%s%s",homedir,combinedname);
+	fprintf(stderr,"processing hardlink %s -> %s\n",source,target);
+	
+	source[strrchr(source,'/')-source] = '\0';
+	lstat(source,&parentstat);
+	source[strlen(source)] = '/';
+	if(link(target,source) == -1){
+		fprintf(stderr,"link fail\n");
+		send_response(conn_fd,CSIEBOX_PROTOCOL_OP_SYNC_HARDLINK,CSIEBOX_PROTOCOL_STATUS_FAIL);
+		return;
+	}
+	source[strrchr(source,'/')-source] = '\0';
+	modify_time(source,&parentstat);
+	source[strlen(source)] = '/';
+	send_response(conn_fd,CSIEBOX_PROTOCOL_OP_SYNC_HARDLINK,CSIEBOX_PROTOCOL_STATUS_OK);
+}
+
 //this is where the server handle requests, you should write your code here
 static void handle_request(csiebox_server* server, int conn_fd) {
-	char *pathname = NULL;
+	char *pathname = NULL,homedir[PATH_MAX];
   csiebox_protocol_header header;
   memset(&header, 0, sizeof(header));
   while (recv_message(conn_fd, &header, sizeof(header))) {
@@ -361,7 +384,8 @@ static void handle_request(csiebox_server* server, int conn_fd) {
         fprintf(stderr, "login\n");
         csiebox_protocol_login req;
         if (complete_message_with_header(conn_fd, &header, &req)) {
-          login(server, conn_fd, &req);
+			login(server, conn_fd, &req);
+			sprintf(homedir,"%s/%s",server->arg.path,server->client[conn_fd]->account.user);
         }
         break;
       case CSIEBOX_PROTOCOL_OP_SYNC_META:
@@ -370,23 +394,21 @@ static void handle_request(csiebox_server* server, int conn_fd) {
         if(pathname != NULL)
         	free(pathname);
         if (complete_message_with_header(conn_fd, &header, &meta)) {
-        	pathname = sync_meta(server, conn_fd, &meta);
+        	pathname = sync_meta(conn_fd, &meta, homedir);
         }
         break;
       case CSIEBOX_PROTOCOL_OP_SYNC_FILE:
         fprintf(stderr, "sync file\n");
         csiebox_protocol_file file;
         if (complete_message_with_header(conn_fd, &header, &file)) {
-        	sync_file(server, conn_fd, &file, pathname);
+        	sync_file(conn_fd, &file, pathname);
         }
         break;
       case CSIEBOX_PROTOCOL_OP_SYNC_HARDLINK:
         fprintf(stderr, "sync hardlink\n");
         csiebox_protocol_hardlink hardlink;
         if (complete_message_with_header(conn_fd, &header, &hardlink)) {
-          //====================
-          //        TODO
-          //====================
+			sync_hardlink(conn_fd,&hardlink,homedir);
         }
         break;
       case CSIEBOX_PROTOCOL_OP_SYNC_END:

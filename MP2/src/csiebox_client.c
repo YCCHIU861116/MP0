@@ -15,6 +15,12 @@
 
 #define DATABUF_SIZE 4000
 #define PATHLEN_SIZE 301
+#define FILENUM_MAX 300
+
+struct nameino{
+	ino_t inodenum;
+	char filename[PATHLEN_SIZE];
+};
 
 static int parse_arg(csiebox_client* client, int argc, char** argv);
 static int login(csiebox_client* client);
@@ -125,13 +131,13 @@ int recv_response(int conn_fd,uint8_t flag){
 	return 0;
 }
 
-int sync_meta(char *pathname, int conn_fd, struct stat *stat){
+int sync_meta(char *pathname, int conn_fd, struct stat *stat,int cdirlen){
 	csiebox_protocol_meta req;
 	memset(&req, 0, sizeof(req));
 	req.message.header.req.magic = CSIEBOX_PROTOCOL_MAGIC_REQ;
 	req.message.header.req.op = CSIEBOX_PROTOCOL_OP_SYNC_META;
 	req.message.header.req.datalen = sizeof(req) - sizeof(req.message.header);
-	req.message.body.pathlen = strlen(pathname)+1;
+	req.message.body.pathlen = strlen(pathname)+1-cdirlen;
 	req.message.body.stat = *stat;
 	if(S_ISDIR(stat->st_mode) == 0){
 		if(S_ISLNK(stat->st_mode)){
@@ -147,7 +153,7 @@ int sync_meta(char *pathname, int conn_fd, struct stat *stat){
 		fprintf(stderr,"send error\n");
 		return 0;
 	}
-	send_message(conn_fd, pathname, strlen(pathname)+1);
+	send_message(conn_fd, pathname+cdirlen, req.message.body.pathlen);
 	return recv_response(conn_fd,CSIEBOX_PROTOCOL_OP_SYNC_META);
 }
 
@@ -185,15 +191,53 @@ int sync_file(char *pathname,int conn_fd,struct stat *stat){
 	return recv_response(conn_fd,CSIEBOX_PROTOCOL_OP_SYNC_FILE);
 }
 
-int cdir_traverse(char *path, int conn_fd,int *maxdepth, char* longestpath){
-	char len = strlen(path);
+char *searchhardlink(ino_t inodenum,struct nameino *inodelist, int *inodesum){
+	for(int i = 0; i < (*inodesum); i++){
+		if(inodenum == inodelist[i].inodenum)
+			return inodelist[i].filename;
+	}
+	return NULL;
+}
+
+int sync_hardlink(char *target, char *source, int conn_fd,int cdirlen){
+	csiebox_protocol_hardlink req;
+	memset(&req, 0, sizeof(req));
+	req.message.header.req.magic = CSIEBOX_PROTOCOL_MAGIC_REQ;
+	req.message.header.req.op = CSIEBOX_PROTOCOL_OP_SYNC_HARDLINK;
+	req.message.header.req.datalen = sizeof(req) - sizeof(req.message.header);
+	req.message.body.srclen = strlen(source+cdirlen);
+	req.message.body.targetlen = strlen(target+cdirlen);
+	if(send_message(conn_fd,&req,sizeof(req)) == 0){
+		fprintf(stderr,"send fail\n");
+		return 0;
+	}
+	fprintf(stderr,"sending hardlink %s -> %s\n",source,target);
+	strcat(source,target+cdirlen);
+	send_message(conn_fd,source+cdirlen,req.message.body.srclen+req.message.body.targetlen+1);
+	source[req.message.body.srclen] = '\0';
+	return recv_response(conn_fd,CSIEBOX_PROTOCOL_OP_SYNC_HARDLINK);
+} 
+
+int cdir_traverse(char *path,int cdirlen,int conn_fd,int *maxdepth, 
+		char* longestpath,struct nameino *inodelist,int *inodesum){
+	int len = strlen(path);
 	struct stat *statbuf = (struct stat*)malloc(sizeof(struct stat));
 	if(lstat(path,statbuf) <0){
 		fprintf(stderr,"%s lstat error\n",path);
 		return 0;
 	}
-	if(sync_meta(path,conn_fd,statbuf) == 2)
-		sync_file(path,conn_fd,statbuf);
+	char *target;
+	if((S_ISDIR(statbuf->st_mode) == 0)&&((target = searchhardlink(statbuf->st_ino,inodelist,inodesum)) != NULL))
+		sync_hardlink(target,path,conn_fd,cdirlen);
+	else{
+		if(S_ISDIR(statbuf->st_mode) == 0){
+			inodelist[*inodesum].inodenum = statbuf->st_ino;
+			strcpy(inodelist[*inodesum].filename,path);
+			(*inodesum)++;
+		}
+		if(sync_meta(path,conn_fd,statbuf,cdirlen) == 2)
+			sync_file(path,conn_fd,statbuf);
+	}
 	
 	//dealing with deepestpath	
 	int depthsum = 0;
@@ -229,7 +273,7 @@ int cdir_traverse(char *path, int conn_fd,int *maxdepth, char* longestpath){
 			strcpy(path+len+1,dp->d_name);
 			if(!(strcmp(path,longestpath)))
 				continue;
-			if(cdir_traverse(path,conn_fd,maxdepth,longestpath) == 0)
+			if(cdir_traverse(path,cdirlen,conn_fd,maxdepth,longestpath,inodelist,inodesum) == 0)
 				return 0;
 		} 
 		closedir(dir);
@@ -253,15 +297,18 @@ int csiebox_client_run(csiebox_client* client) {
   //This is a sample function showing how to send data using defined header in common.h
   //You can remove it after you understand
   //sampleFunction(client);
-  int maxdepth = 0;
+  int maxdepth = 0,inodesum = 0;
   char pathname[PATHLEN_SIZE],longestpath[51];
   strcpy(pathname,client->arg.path);
   strcpy(longestpath,pathname);
   strcat(longestpath,"/longestPath.txt");
-  cdir_traverse(pathname,client->conn_fd,&maxdepth,longestpath);
+  struct nameino inodelist[FILENUM_MAX];
+  
+  cdir_traverse(pathname,strlen(client->arg.path),client->conn_fd,&maxdepth,longestpath,inodelist,&inodesum);
+
   struct stat statbuf;
   lstat(longestpath,&statbuf);
-  if(sync_meta(longestpath,client->conn_fd,&statbuf)==2);
+  if(sync_meta(longestpath,client->conn_fd,&statbuf,strlen(client->arg.path))==2);
 	sync_file(longestpath,client->conn_fd,&statbuf);
   modify_time(longestpath,&statbuf);
   return 1;
