@@ -46,7 +46,7 @@ int recursiveUpdate(char *buf,int len,MD5_CTX ctx,int target,int zeronum,char *r
 						break;
 					case QUIT:
 						printf("BOSS is at rest.\n");
-						return -1;
+						return -2;
 					default:
 						fprintf(stderr,"Unknown OP\n");
 				}
@@ -110,7 +110,7 @@ int main(int argc, char **argv)
 					printf("BOSS is mindful.\n");
 					break;
 				case MINE:{
-					fprintf(stderr,"assigned job charnum = %d\n",Todo.charnum);
+					fprintf(stderr,"assigned job charnum = %d, target treasure = %d\n",Todo.charnum,Todo.zeronum);
 					int minefd;
 					if((minefd = open(Todo.path,O_RDONLY)) < 0){
 						fprintf(stderr,"open mine error: %s\n",Todo.path);
@@ -120,11 +120,20 @@ int main(int argc, char **argv)
 					size_t len;
 					while ((len = read(minefd, minebuf, 4096)) == 4096){
 						struct todo tmp;
-						if(read(input_fd,&tmp,sizeof(struct todo))>0){
-							if(tmp.Head.op == QUIT && strcmp(tmp.Head.password,PASSWORD) == 0)
-								continue;
-						}
  						MD5Update(&ctx, (const unsigned char*)minebuf, len);
+						if(read(input_fd,&tmp,sizeof(struct todo))>0){
+							if(strcmp(tmp.Head.password,PASSWORD) != 0)
+								fprintf(stderr,"wrong password\n");
+							else if(tmp.Head.op == QUIT){
+								printf("BOSS is at rest.\n");
+								continue;
+							}
+							else if(tmp.Head.op == STOP){
+								fprintf(stderr,"main: ");
+								printf("%s wins a %d-treasure! %s\n",Todo.path,Todo.zeronum,Todo.message);
+								continue;
+							}
+						}
 					}
  					close(minefd);
 					for(int i = Todo.minerid; i < 256 && !find; i += Todo.minernum){
@@ -153,17 +162,21 @@ int main(int argc, char **argv)
 							continue;
 						}
 					}
+					else
+						MD5Init(&ctx);
 					break;
 				}
 				case STOP:
 					fprintf(stderr,"main: ");
 					printf("%s wins a %d-treasure! %s\n",Todo.path,Todo.zeronum,Todo.message);
+					MD5Init(&ctx);
 					break;
 				case STATUS:
 					fprintf(stderr,"No assigned jobs\n");
 					break;
 				case QUIT:
 					printf("BOSS is at rest.\n");
+					MD5Init(&ctx);
 					break;
 				default:
 					fprintf(stderr,"Unknown op\n");

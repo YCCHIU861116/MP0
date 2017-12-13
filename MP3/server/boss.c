@@ -52,6 +52,7 @@ int link_start(struct fd_pair* miners, int minernum){
 int assign_jobs(struct fd_pair* miners, int minernum,int charnum,char* mine_path,int zeronum) 
 {
     /* TODO design your own (1) communication protocol (2) job assignment algorithm */
+    fprintf(stderr,"assigning job to find %d-treasure in %d chars...\n",zeronum,charnum);
     struct todo Todo;
     for(int i = 0; i < minernum; i++){
     	Todo.Head.op = MINE;
