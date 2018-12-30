@@ -1,0 +1,29 @@
+# commit 1
+[new_file]
+a.txt
+[modified]
+[copied]
+(MD5)
+a.txt 0cc175b9c0f1b6a831c399e269772661
+
+# commit 2
+[new_file]
+.loser_config
+[modified]
+[copied]
+a.txt => _a.txt
+(MD5)
+.loser_config 759656817c316c8cb8f1d276ae324f0b
+_a.txt 0cc175b9c0f1b6a831c399e269772661
+a.txt 0cc175b9c0f1b6a831c399e269772661
+
+# commit 3
+[new_file]
+MP1.c
+[modified]
+[copied]
+(MD5)
+.loser_config 759656817c316c8cb8f1d276ae324f0b
+MP1.c a4a29a06d60b33752c9b33744beafe7c
+_a.txt 0cc175b9c0f1b6a831c399e269772661
+a.txt 0cc175b9c0f1b6a831c399e269772661

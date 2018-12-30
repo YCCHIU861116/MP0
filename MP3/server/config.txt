@@ -1,0 +1,5 @@
+MINE: ../mine.bin
+MINER: fifo1_in fifo1_out
+MINER: fifo2_in fifo2_out
+MINER: fifo3_in fifo3_out
+

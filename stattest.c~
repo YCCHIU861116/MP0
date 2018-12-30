@@ -1,0 +1,12 @@
+#include<stdio.h>
+#include<unistd.h>
+#include<sys/stat.h>
+int main()
+{
+	struct stat statbuf;
+	int fd = open("C:/Users/admin/Desktop/Code/SP/stattest.c",O_RDONLY);
+	stat("C:/Users/admin/Desktop/Code/SP/stattest.c",&statbuf);
+	printf("dev:\t%d\n",statbuf.st_dev);
+	printf("ino:\t%d\n",statbuf.st_ino);
+	return 0;
+}

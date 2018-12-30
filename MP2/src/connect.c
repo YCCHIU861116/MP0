@@ -39,7 +39,7 @@ int connect_to(const char* servername, int port) {
     fprintf(stderr, "bad server address error\n");
     return -1;
   }
-  int fd = socket(AF_INET, SOCK_STREAM, 0);//TCP
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) {
     fprintf(stderr, "socket open error\n");
     return -1;
@@ -47,7 +47,7 @@ int connect_to(const char* servername, int port) {
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
   addr.sin_family = AF_INET;
-  addr.sin_port = htons(port);//big endian
+  addr.sin_port = htons(port);
   memcpy(&addr.sin_addr.s_addr,
          server->h_addr_list[0],
          server->h_length);

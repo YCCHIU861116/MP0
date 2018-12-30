@@ -1,0 +1,16 @@
+{
+  "name": "mp1_judge",
+  "version": "1.0.0",
+  "description": "測試臺大2017系統測試設計施吉昇班mp1",
+  "main": "judge.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "MROS",
+  "license": "ISC",
+  "dependencies": {
+    "colors": "^1.1.2",
+    "md5": "^2.2.1",
+    "yargs": "^9.0.1"
+  }
+}
